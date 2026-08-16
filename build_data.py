@@ -56,7 +56,22 @@ CONFIG = {
     "star_max_drawdown": -15.0,
     "star_requires_above_sma200": True,
 
-    "universe_size": 500,
+    # ---- Universe -----------------------------------------------------------
+    # "broad"    — every NSE primary listing above the market cap floor below.
+    #              ~2,000 names, ~140 industries, full TradingView taxonomy.
+    #              More one- and two-name industries; the `thin` flag marks them.
+    # "nifty500" — index constituents only. ~500 names, ~85 industries.
+    #              Cleaner and more liquid, but the narrow industries vanish
+    #              entirely because their members sit below the index cutoff.
+    "universe_mode": "broad",
+
+    # Floor for "broad" mode, in rupees. 5e9 = Rs 500 crore.
+    # Raise to 2e10 (Rs 2,000 cr) if the small-cap tail feels too noisy.
+    "min_market_cap_inr": 5e9,
+
+    # Hard ceiling on rows requested, whichever mode is used.
+    "universe_size": 2500,
+
     "request_timeout": 45,
 }
 
@@ -106,34 +121,55 @@ def _post(payload):
     return r.json()
 
 
+def _broad_attempt():
+    floor = CONFIG["min_market_cap_inr"]
+    return (f"NSE above Rs {floor/1e7:,.0f} cr", {
+        "filter": [
+            {"left": "type", "operation": "equal", "right": "stock"},
+            {"left": "exchange", "operation": "equal", "right": "NSE"},
+            {"left": "is_primary", "operation": "equal", "right": True},
+            {"left": "market_cap_basic", "operation": "egreater", "right": floor},
+        ],
+        "options": {"lang": "en"},
+        "symbols": {"query": {"types": []}, "tickers": []},
+        "columns": COLUMNS,
+        "sort": {"sortBy": "market_cap_basic", "sortOrder": "desc"},
+        "range": [0, CONFIG["universe_size"]],
+    })
+
+
+def _index_attempt():
+    return ("NIFTY500 constituents", {
+        "filter": [{"left": "type", "operation": "equal", "right": "stock"}],
+        "options": {"lang": "en"},
+        "symbols": {"symbolset": ["SYML:NSE;NIFTY500"]},
+        "columns": COLUMNS,
+        "sort": {"sortBy": "market_cap_basic", "sortOrder": "desc"},
+        "range": [0, 550],
+    })
+
+
 def fetch_universe():
     """
-    Try the Nifty 500 index constituent list first. If TradingView changes that
-    endpoint shape (it has before), fall back to the top-N NSE stocks by market
-    cap, which is a close enough proxy and never breaks.
+    Pull the stock universe, in the order set by CONFIG["universe_mode"].
+
+    The two modes answer different questions. Broad mode covers the whole
+    TradingView industry taxonomy, which is what you want if the dashboard's
+    job is spotting rotation into corners nobody is looking at yet. Index mode
+    covers only what a fund could buy at size.
+
+    Broad is the default because a row reading "1 stk / thin" is not an
+    industry. It is the largest member of a group whose other members were cut
+    off by the universe filter, and that silently distorts every number on the
+    row -- the 52-week drawdown and the long-horizon returns most of all.
+
+    Whichever mode is chosen, the other stays as a fallback, so a change at
+    TradingView's end degrades the dashboard rather than breaking it.
     """
-    attempts = [
-        ("NIFTY500 constituents", {
-            "filter": [{"left": "type", "operation": "equal", "right": "stock"}],
-            "options": {"lang": "en"},
-            "symbols": {"symbolset": ["SYML:NSE;NIFTY500"]},
-            "columns": COLUMNS,
-            "sort": {"sortBy": "market_cap_basic", "sortOrder": "desc"},
-            "range": [0, CONFIG["universe_size"] + 50],
-        }),
-        ("top NSE by market cap", {
-            "filter": [
-                {"left": "type", "operation": "equal", "right": "stock"},
-                {"left": "exchange", "operation": "equal", "right": "NSE"},
-                {"left": "is_primary", "operation": "equal", "right": True},
-            ],
-            "options": {"lang": "en"},
-            "symbols": {"query": {"types": []}, "tickers": []},
-            "columns": COLUMNS,
-            "sort": {"sortBy": "market_cap_basic", "sortOrder": "desc"},
-            "range": [0, CONFIG["universe_size"]],
-        }),
-    ]
+    if CONFIG["universe_mode"] == "nifty500":
+        attempts = [_index_attempt(), _broad_attempt()]
+    else:
+        attempts = [_broad_attempt(), _index_attempt()]
 
     last_err = None
     for label, payload in attempts:
