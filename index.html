@@ -98,7 +98,7 @@ tbody tr.ind:hover td{background:#F4F7F9}
 tbody tr.ind.open td{background:var(--indigo-soft)}
 
 /* sticky name column */
-.c-name{position:sticky;left:0;z-index:4;background:var(--surface);border-right:1px solid var(--rule);min-width:250px;max-width:250px}
+.c-name{position:sticky;left:0;z-index:4;background:var(--surface);border-right:1px solid var(--rule);min-width:228px;max-width:228px}
 thead .c-name{z-index:6;background:var(--surface-2)}
 tr.ind:hover .c-name{background:#F4F7F9}
 tr.ind.open .c-name{background:var(--indigo-soft)}
@@ -109,9 +109,6 @@ tr.open .tw{transform:rotate(90deg);color:var(--indigo)}
 .nm .t{font-weight:600;font-size:13px;line-height:1.15;white-space:normal}
 .nm .s{font-size:10.5px;color:var(--ink-3);font-family:var(--mono);margin-top:2px}
 .star{color:var(--gold)}
-.rk{font-family:var(--mono);font-size:10.5px;color:var(--ink-3);width:22px;flex:none;text-align:right}
-.rkc{font-size:9.5px;font-family:var(--mono)}
-.rkc.u{color:var(--up)} .rkc.d{color:var(--dn)}
 
 /* weight bar */
 .wbar{display:flex;align-items:center;gap:7px;justify-content:flex-end}
@@ -200,6 +197,10 @@ details.notes[open] summary{margin-bottom:10px;color:var(--ink)}
       <button id="b-abs" aria-pressed="true">Absolute</button>
       <button id="b-rel" aria-pressed="false">vs CNX500</button>
     </div>
+    <div class="seg" role="group" aria-label="Thin industries">
+      <button id="t-all" aria-pressed="true">All rows</button>
+      <button id="t-thin" aria-pressed="false">Hide thin</button>
+    </div>
     <select id="f-cycle" aria-label="Filter by cycle stage">
       <option value="">All stages</option>
       <option>Late</option><option>Mid</option><option>Early</option>
@@ -234,6 +235,7 @@ details.notes[open] summary{margin-bottom:10px;color:var(--ink)}
       <dt>vs CNX500</dt><dd>Return compounded against the benchmark, not subtracted from it: (1+industry) ÷ (1+index) − 1. Over 3 months the two agree; over 5 years subtraction gives numbers like −180%, which mean nothing. The Absolute / vs CNX500 toggle re-bases every return column.</dd>
       <dt>Breadth</dt><dd>Share of members trading above their 200-day average. A rally with low breadth is two stocks, not a rotation.</dd>
       <dt>Turnover</dt><dd>Today's traded value divided by the 10-day average. A rough participation check, not a measure of fund flows.</dd>
+      <dt>Thin</dt><dd>Fewer than three members in the universe. The aggregate is still shown, but a one- or two-stock "industry" is really just those stocks — its 52-week drawdown and long-horizon returns will look nothing like the same industry measured on a wider universe. Use <b>Hide thin</b> to drop them.</dd>
       <dt>Star stock</dt><dd>Beats its own industry over 3M, trades above its 200-day average, and is within 15% of its 52-week high.</dd>
     </dl>
     <div class="disc">Relative performance is not fund flow. This shows which industries are outperforming the index and how broadly — it does not observe money entering or leaving anything. Nothing here is investment advice; it is a screening and journaling instrument.</div>
@@ -244,7 +246,7 @@ details.notes[open] summary{margin-bottom:10px;color:var(--ink)}
 <script>
 const HZ = ["1D","1W","1M","3M","6M","1Y","5Y"];
 const STAGES = ["Lagging","Basing","Early","Mid","Late"];
-let DATA = null, MODE = "abs", SORT = {key:"rank", dir:1}, OPEN = new Set();
+let DATA = null, MODE = "abs", HIDE_THIN = false, SORT = {key:"rank", dir:1}, OPEN = new Set();
 
 const $ = s => document.querySelector(s);
 const fmt = (v,d=1) => v===null||v===undefined ? "–" : (v>0?"+":"")+v.toFixed(d)+"%";
@@ -342,6 +344,7 @@ function drawBody(){
   const fc = $("#f-cycle").value, fm = $("#f-mood").value, fs = $("#f-sector").value;
 
   let rows = DATA.industries.filter(i=>{
+    if(HIDE_THIN && i.thin) return false;
     if(fc && i.cycle.stage!==fc) return false;
     if(fm && i.mood!==fm) return false;
     if(fs && i.sector!==fs) return false;
@@ -368,7 +371,9 @@ function drawBody(){
     return SORT.dir*c;
   });
 
-  $("#count").textContent = `${rows.length} of ${DATA.industries.length} industries`;
+  const thinN = DATA.industries.filter(i=>i.thin).length;
+  $("#count").textContent = `${rows.length} of ${DATA.industries.length} industries`
+    + (HIDE_THIN && thinN ? ` · ${thinN} thin hidden` : "");
 
   if(!rows.length){
     $("#body").innerHTML = `<tr><td colspan="20"><div class="empty">
@@ -401,8 +406,6 @@ function drawBody(){
 
 function row(i, scale, rsScale, maxW){
   const open = OPEN.has(i.industry);
-  const rc = i.rankChange;
-  const rcTxt = rc ? `<span class="rkc ${rc>0?"u":"d"}">${rc>0?"▲":"▼"}${Math.abs(rc)}</span>` : "";
 
   const rail = `<div class="rail">
     <div class="track">${STAGES.map((s,n)=>{
@@ -423,7 +426,6 @@ function row(i, scale, rsScale, maxW){
     <td class="l c-name">
       <div class="nm">
         <span class="tw">▶</span>
-        <span class="rk">${i.rank}${rcTxt}</span>
         <span>
           <div class="t">${i.industry}</div>
           <div class="s">${i.stockCount} stk${i.starCount?` · <span class="star">★ ${i.starCount}</span>`:""}${i.thin?` · <span class="warn">thin</span>`:""}</div>
@@ -505,6 +507,14 @@ function setMode(m){
   MODE = m;
   $("#b-abs").setAttribute("aria-pressed", m==="abs");
   $("#b-rel").setAttribute("aria-pressed", m==="rel");
+  drawBody();
+}
+$("#t-all").onclick  = () => setThin(false);
+$("#t-thin").onclick = () => setThin(true);
+function setThin(v){
+  HIDE_THIN = v;
+  $("#t-all").setAttribute("aria-pressed", !v);
+  $("#t-thin").setAttribute("aria-pressed", v);
   drawBody();
 }
 ["#f-cycle","#f-mood","#f-sector"].forEach(s=>$(s).onchange = drawBody);
